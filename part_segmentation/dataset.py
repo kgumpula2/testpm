@@ -199,14 +199,16 @@ class NuScenesLidarDataset(Dataset):
             lidar_points = lidar_points[choice]
             labels = labels[choice]
 
+        lidar_points[:, 0:3] = pc_normalize(lidar_points[:, 0:3])
+        lidar_points = lidar_points[:, :3]
+
         # Convert to PyTorch tensors
         lidar_points_tensor = torch.from_numpy(lidar_points).float()
         labels_tensor = torch.from_numpy(labels).long()
 
         # dummy cls
         cls = torch.zeros(1).long()
-        lidar_points_tensor[:, 0:3] = pc_normalize(lidar_points_tensor[:, 0:3])
-        lidar_points_tensor = lidar_points_tensor[:, :3]
+
         return lidar_points_tensor, cls, labels_tensor
 
 
