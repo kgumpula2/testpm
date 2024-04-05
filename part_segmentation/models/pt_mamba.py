@@ -410,12 +410,12 @@ class MixerModelForSegmentation(MixerModel):
 
 
 class get_model(nn.Module):
-    def __init__(self, cls_dim, config=None):
+    def __init__(self, cls_dim, config=None, num_classes=16):
         super().__init__()
-
         self.trans_dim = config.trans_dim
         self.depth = config.depth
         self.cls_dim = cls_dim
+        self.num_classes = num_classes
 
         self.group_size = 32
         self.num_group = 128
@@ -441,7 +441,7 @@ class get_model(nn.Module):
 
         self.norm = nn.LayerNorm(self.trans_dim)
 
-        self.label_conv = nn.Sequential(nn.Conv1d(16, 64, kernel_size=1, bias=False),
+        self.label_conv = nn.Sequential(nn.Conv1d(self.num_classes, 64, kernel_size=1, bias=False),
                                         nn.BatchNorm1d(64),
                                         nn.LeakyReLU(0.2))
 
@@ -524,7 +524,7 @@ class get_model(nn.Module):
         x_avg = torch.mean(x, 2)
         x_max_feature = x_max.view(B, -1).unsqueeze(-1).repeat(1, 1, N)
         x_avg_feature = x_avg.view(B, -1).unsqueeze(-1).repeat(1, 1, N)
-        cls_label_one_hot = cls_label.view(B, 16, 1)
+        cls_label_one_hot = cls_label.view(B, self.num_classes, 1)
         cls_label_feature = self.label_conv(cls_label_one_hot).repeat(1, 1, N)
         x_global_feature = torch.cat((x_max_feature, x_avg_feature, cls_label_feature), 1)
 

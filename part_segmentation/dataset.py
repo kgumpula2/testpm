@@ -4,6 +4,7 @@ from torch.utils.data import Dataset
 import torch
 from pointnet_util import farthest_point_sample, pc_normalize
 import json
+from nuscenes.nuscenes import NuScenes
 
 
 class ModelNetDataLoader(Dataset):
@@ -161,6 +162,52 @@ class PartNormalDataset(Dataset):
 
     def __len__(self):
         return len(self.datapath)
+    
+
+class NuScenesLidarDataset(Dataset):
+    def __init__(self, root='../data/nuscenes', num_classes=32, npoints=30000, version='v1.0-mini', lidarseg_path='lidarseg', split="test"):
+        self.nusc = NuScenes(version=version, dataroot=root, verbose=True)
+        self.lidarseg_path = os.path.join(root, lidarseg_path, version)
+        self.max_points = npoints
+        self.num_classes = num_classes
+
+    def __len__(self):
+        return len(self.nusc.sample)
+
+    def __getitem__(self, idx):
+        sample = self.nusc.sample[idx]
+        lidar_token = sample['data']['LIDAR_TOP']
+        lidar_data = self.nusc.get('sample_data', lidar_token)
+        lidar_filepath = os.path.join(self.nusc.dataroot, lidar_data['filename'])
+        lidar_points = np.fromfile(lidar_filepath, dtype=np.float32).reshape(-1, 5)
+
+        # Load corresponding segmentation labels
+        lidarseg_filepath = os.path.join(self.lidarseg_path, lidar_token + '_lidarseg.bin')
+        if os.path.exists(lidarseg_filepath):
+            labels = np.fromfile(lidarseg_filepath, dtype=np.uint8)
+        else:
+            labels = np.zeros(len(lidar_points), dtype=np.uint8)
+
+        # Pad or truncate the point clouds and labels
+        num_points = len(lidar_points)
+        if num_points < self.max_points:
+            pad_size = self.max_points - num_points
+            lidar_points = np.pad(lidar_points, ((0, pad_size), (0, 0)), mode='constant', constant_values=0)
+            labels = np.pad(labels, (0, pad_size), mode='constant', constant_values=self.num_classes)  # Padding labels with a null value
+        elif num_points > self.max_points:
+            choice = np.random.choice(num_points, self.max_points, replace=True)
+            lidar_points = lidar_points[choice]
+            labels = labels[choice]
+
+        # Convert to PyTorch tensors
+        lidar_points_tensor = torch.from_numpy(lidar_points).float()
+        labels_tensor = torch.from_numpy(labels).long()
+
+        # dummy cls
+        cls = torch.zeros(1).long()
+        lidar_points_tensor[:, 0:3] = pc_normalize(lidar_points_tensor[:, 0:3])
+        lidar_points_tensor = lidar_points_tensor[:, :3]
+        return lidar_points_tensor, cls, labels_tensor
 
 
 if __name__ == '__main__':

@@ -14,7 +14,7 @@ import torch.optim as optim
 from timm.scheduler import CosineLRScheduler
 from pathlib import Path
 from tqdm import tqdm
-from dataset import PartNormalDataset
+from dataset import PartNormalDataset, NuScenesLidarDataset
 
 seed = 42
 torch.manual_seed(seed)
@@ -28,15 +28,6 @@ torch.backends.cudnn.benchmark = False
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = BASE_DIR
 sys.path.append(os.path.join(ROOT_DIR, 'models'))
-
-seg_classes = {'Earphone': [16, 17, 18], 'Motorbike': [30, 31, 32, 33, 34, 35], 'Rocket': [41, 42, 43],
-               'Car': [8, 9, 10, 11], 'Laptop': [28, 29], 'Cap': [6, 7], 'Skateboard': [44, 45, 46], 'Mug': [36, 37],
-               'Guitar': [19, 20, 21], 'Bag': [4, 5], 'Lamp': [24, 25, 26, 27], 'Table': [47, 48, 49],
-               'Airplane': [0, 1, 2, 3], 'Pistol': [38, 39, 40], 'Chair': [12, 13, 14, 15], 'Knife': [22, 23]}
-seg_label_to_cat = {}  # {0:Airplane, 1:Airplane, ...49:Table}
-for cat in seg_classes.keys():
-    for label in seg_classes[cat]:
-        seg_label_to_cat[label] = cat
 
 
 def inplace_relu(m):
@@ -72,6 +63,7 @@ def parse_args():
     parser.add_argument('--ckpts', type=str, default=None, help='ckpts')
     parser.add_argument('--root', type=str, default='../data/shapenetcore_partanno_segmentation_benchmark_v0_normal/',
                         help='data root')
+    parser.add_argument('--use_nuscenes', action='store_true', default=False, help='use nuscenes dataset')
     return parser.parse_args()
 
 
@@ -112,18 +104,35 @@ def main(args):
     log_string(args)
 
     root = args.root
+    use_nuscenes = args.use_nuscenes
 
-    TRAIN_DATASET = PartNormalDataset(root=root, npoints=args.npoint, split='trainval', normal_channel=args.normal)
+    if not use_nuscenes:
+        num_classes = 16
+        num_part = 50
+        seg_classes = {'Earphone': [16, 17, 18], 'Motorbike': [30, 31, 32, 33, 34, 35], 'Rocket': [41, 42, 43],
+                    'Car': [8, 9, 10, 11], 'Laptop': [28, 29], 'Cap': [6, 7], 'Skateboard': [44, 45, 46], 'Mug': [36, 37],
+                    'Guitar': [19, 20, 21], 'Bag': [4, 5], 'Lamp': [24, 25, 26, 27], 'Table': [47, 48, 49],
+                    'Airplane': [0, 1, 2, 3], 'Pistol': [38, 39, 40], 'Chair': [12, 13, 14, 15], 'Knife': [22, 23]}
+        seg_label_to_cat = {}  # {0:Airplane, 1:Airplane, ...49:Table}
+        for cat in seg_classes.keys():
+            for label in seg_classes[cat]:
+                seg_label_to_cat[label] = cat
+        TRAIN_DATASET = PartNormalDataset(root=root, npoints=args.npoint, split='trainval', normal_channel=args.normal)
+        TEST_DATASET = PartNormalDataset(root=root, npoints=args.npoint, split='test', normal_channel=args.normal)
+    else:
+        num_classes = 1
+        num_part = 32
+        seg_label_to_cat = {0: 'noise', 1: 'animal', 2: 'human.pedestrian.adult', 3: 'human.pedestrian.child', 4: 'human.pedestrian.construction_worker', 5: 'human.pedestrian.personal_mobility', 6: 'human.pedestrian.police_officer', 7: 'human.pedestrian.stroller', 8: 'human.pedestrian.wheelchair', 9: 'movable_object.barrier', 10: 'movable_object.debris', 11: 'movable_object.pushable_pullable', 12: 'movable_object.trafficcone', 13: 'static_object.bicycle_rack', 14: 'vehicle.bicycle', 15: 'vehicle.bus.bendy', 16: 'vehicle.bus.rigid', 17: 'vehicle.car', 18: 'vehicle.construction', 19: 'vehicle.emergency.ambulance', 20: 'vehicle.emergency.police', 21: 'vehicle.motorcycle', 22: 'vehicle.trailer', 23: 'vehicle.truck', 24: 'flat.driveable_surface', 25: 'flat.other', 26: 'flat.sidewalk', 27: 'flat.terrain', 28: 'static.manmade', 29: 'static.other', 30: 'static.vegetation', 31: 'vehicle.ego'}
+        seg_classes = {v: [k] for k, v in seg_label_to_cat.items()}
+        TRAIN_DATASET = NuScenesLidarDataset(npoints=args.npoint, split='trainval')
+        TEST_DATASET = NuScenesLidarDataset(npoints=args.npoint, split='test')
+
     trainDataLoader = torch.utils.data.DataLoader(TRAIN_DATASET, batch_size=args.batch_size, shuffle=True,
                                                   num_workers=10, drop_last=True)
-    TEST_DATASET = PartNormalDataset(root=root, npoints=args.npoint, split='test', normal_channel=args.normal)
     testDataLoader = torch.utils.data.DataLoader(TEST_DATASET, batch_size=args.batch_size, shuffle=False,
                                                  num_workers=10)
     log_string("The number of training data is: %d" % len(TRAIN_DATASET))
     log_string("The number of test data is: %d" % len(TEST_DATASET))
-
-    num_classes = 16
-    num_part = 50
 
     '''MODEL LOADING'''
     shutil.copy('models/%s.py' % args.model, str(exp_dir))
@@ -146,14 +155,14 @@ def main(args):
         if hasattr(config, 'model'):
             MODEL = importlib.import_module(config.model) if hasattr(config, 'model') else importlib.import_module(
                 args.model)
-            classifier = MODEL.get_model(num_part, config).cuda()
+            classifier = MODEL.get_model(num_part, config, num_classes=num_classes).cuda()
         else:
             MODEL = importlib.import_module(args.model)
-            classifier = MODEL.get_model(num_part).cuda()
+            classifier = MODEL.get_model(num_part, num_classes=num_classes).cuda()
     else:
         MODEL = importlib.import_module(args.model)
         shutil.copy('models/%s.py' % args.model, str(exp_dir))
-        classifier = MODEL.get_model(num_part).cuda()
+        classifier = MODEL.get_model(num_part, num_classes=num_classes).cuda()
     criterion = MODEL.get_loss().cuda()
     classifier.apply(inplace_relu)
     print('# generator parameters:', sum(param.numel() for param in classifier.parameters()))
@@ -323,7 +332,7 @@ def main(args):
                 for iou in shape_ious[cat]:
                     all_shape_ious.append(iou)
                 shape_ious[cat] = np.mean(shape_ious[cat])
-            mean_shape_ious = np.mean(list(shape_ious.values()))
+            mean_shape_ious = np.mean([v for v in shape_ious.values() if not np.isnan(v)])
             test_metrics['accuracy'] = total_correct / float(total_seen)
             test_metrics['class_avg_accuracy'] = np.mean(
                 np.array(total_correct_class) / np.array(total_seen_class, dtype=np.float64))
